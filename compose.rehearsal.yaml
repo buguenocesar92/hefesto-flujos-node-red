@@ -1,0 +1,7 @@
+# Private recovery: flows do not execute; no outbound Internet.
+services:
+  app:
+    command: ["--settings", "/opt/hefesto/settings.js", "--safe"]
+networks:
+  default:
+    internal: true

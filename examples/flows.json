@@ -1,0 +1,99 @@
+[
+  {
+    "id": "hefesto-demo",
+    "type": "tab",
+    "label": "Hefesto · demo local",
+    "disabled": false,
+    "info": "Solo GET de estado y botón manual. Sin red saliente ni credenciales."
+  },
+  {
+    "id": "demo-http",
+    "type": "http in",
+    "z": "hefesto-demo",
+    "name": "GET estado protegido",
+    "url": "/hefesto/health",
+    "method": "get",
+    "upload": false,
+    "swaggerDoc": "",
+    "x": 180,
+    "y": 80,
+    "wires": [
+      [
+        "demo-json"
+      ]
+    ]
+  },
+  {
+    "id": "demo-json",
+    "type": "function",
+    "z": "hefesto-demo",
+    "name": "Respuesta demo",
+    "func": "msg.payload = {ok:true,service:\"hefesto-flujos\",mode:\"demo\"};\nmsg.headers = {\"content-type\":\"application/json\"};\nreturn msg;",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 430,
+    "y": 80,
+    "wires": [
+      [
+        "demo-response"
+      ]
+    ]
+  },
+  {
+    "id": "demo-response",
+    "type": "http response",
+    "z": "hefesto-demo",
+    "name": "HTTP 200",
+    "statusCode": "200",
+    "headers": {},
+    "x": 670,
+    "y": 80,
+    "wires": []
+  },
+  {
+    "id": "demo-inject",
+    "type": "inject",
+    "z": "hefesto-demo",
+    "name": "Prueba manual",
+    "props": [
+      {
+        "p": "payload"
+      }
+    ],
+    "repeat": "",
+    "crontab": "",
+    "once": false,
+    "onceDelay": 0.1,
+    "topic": "",
+    "payload": "Prueba local Hefesto",
+    "payloadType": "str",
+    "x": 180,
+    "y": 180,
+    "wires": [
+      [
+        "demo-debug"
+      ]
+    ]
+  },
+  {
+    "id": "demo-debug",
+    "type": "debug",
+    "z": "hefesto-demo",
+    "name": "Resultado local",
+    "active": true,
+    "tosidebar": true,
+    "console": false,
+    "tostatus": false,
+    "complete": "payload",
+    "targetType": "msg",
+    "statusVal": "",
+    "statusType": "auto",
+    "x": 440,
+    "y": 180,
+    "wires": []
+  }
+]

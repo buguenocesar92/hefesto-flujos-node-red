@@ -1,0 +1,52 @@
+name: hefesto-flujos
+services:
+  initialize:
+    image: alpine:3.22
+    restart: "no"
+    user: "0"
+    entrypoint: [sh, /opt/hefesto/initialize.sh]
+    volumes: [data:/data, ./ops:/opt/hefesto:ro, ./examples:/examples:ro]
+  app:
+    image: nodered/node-red:5.0.8@sha256:b5adb6c9dd29ab80c852d82bc87daed84e729dcff9b00ca1bf958e6de470f2c1
+    command: ["--settings", "/opt/hefesto/settings.js"]
+    restart: unless-stopped
+    stop_grace_period: 60s
+    depends_on:
+      initialize: {condition: service_completed_successfully}
+    environment:
+      TZ: America/Santiago
+      FLOWS: flows.json
+      NODE_RED_ENABLE_PROJECTS: "false"
+      NR_CREDENTIAL_SECRET: ${NR_CREDENTIAL_SECRET:?Generar secreto}
+      NR_ADMIN_USER: ${NR_ADMIN_USER:-hefesto-admin}
+      NR_ADMIN_HASH: ${NR_ADMIN_HASH:?Configurar hash bcrypt}
+      NR_HTTP_USER: ${NR_HTTP_USER:-integracion-demo}
+      NR_HTTP_HASH: ${NR_HTTP_HASH:?Configurar hash bcrypt}
+    expose: ["1880"]
+    healthcheck:
+      test: [CMD, node, -e, "require('http').get('http://127.0.0.1:1880/editor/auth/login',r=>{r.resume();process.exit(r.statusCode===200?0:1)}).on('error',()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+    volumes:
+      - type: volume
+        source: data
+        target: /data
+        volume:
+          nocopy: true
+      - ./ops/settings.js:/opt/hefesto/settings.js:ro
+  filetools:
+    image: alpine:3.22
+    profiles: [tools]
+    user: "0"
+    volumes: [data:/files]
+  permissions:
+    image: alpine:3.22
+    profiles: [tools]
+    user: "0"
+    entrypoint: [sh, -ec, 'chown -R 1000:1000 /files; chmod 700 /files']
+    volumes: [data:/files]
+volumes:
+  data:
+    name: ${VOLUME_PREFIX:-hefesto-flujos}-data
