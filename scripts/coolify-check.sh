@@ -33,9 +33,12 @@ TMP_ENV="$(mktemp -t coolify-check.XXXXXX)"
 STDERR_LOG="$(mktemp -t coolify-check-stderr.XXXXXX)"
 trap 'rm -f "$TMP_ENV" "$STDERR_LOG"' EXIT
 
-# Extrae ${VAR}, ${VAR:-default} y ${VAR:?error}.
+# Extrae el nombre de variable de ${VAR}, ${VAR:-default} y ${VAR:?error}.
+# Solo el nombre va a TMP_ENV; la parte ':...' es sintaxis de docker compose
+# y no debe contaminar el nombre del env var (docker compose no sustituye
+# ${VAR:-default} si el env-file declara una clave con ':-default' incluido).
 mapfile -t VARS < <(grep -oE '\$\{[A-Za-z_][A-Za-z_0-9]*(:[-=?+][^}]*)?\}' "$COMPOSE_FILE" \
-    | sed -E 's/^\$\{//; s/\}.*//' \
+    | sed -E 's/^\$\{//; s/:[-=?+].*//; s/\}.*//' \
     | sort -u)
 
 if [ "${#VARS[@]}" -eq 0 ]; then
@@ -72,12 +75,11 @@ fi
 
 # 3. Validar contrato.
 
-# 3a. Sin 'name' fijo a nivel raíz. El nombre auto-derivado es el basename
-#     del project-directory; cualquier otro valor significa que el compose
-#     lo está forzando.
-ROOT_NAME="$(echo "$RENDERED" | jq -r '.name // ""')"
-if [ "$ROOT_NAME" != "$EXPECTED_PROJECT" ]; then
-    echo "ERROR: compose fuerza 'name' de proyecto ('$ROOT_NAME'); se esperaba '$EXPECTED_PROJECT' (auto-derivado)" >&2
+# 3a. Sin 'name' fijo a nivel raíz. Se detecta directamente sobre el archivo:
+#     cualquier `name:` en la raíz del compose es rechazado sin importar si
+#     coincide con el basename del directorio (Coolify pone el nombre).
+if grep -qE '^name:' "$COMPOSE_FILE"; then
+    echo "ERROR: compose: 'name' fijo a nivel raíz; Coolify pone el nombre de proyecto" >&2
     exit 1
 fi
 
@@ -148,13 +150,12 @@ for SVC in $SERVICES_NO_PROFILES; do
         exit 1
     fi
 
-    # security_opt: si contiene unconfined, falla
-    SO_LEN="$(echo "$RENDERED" | jq -r "$JP.security_opt // [] | length")"
-    if [ "$SO_LEN" -gt 0 ]; then
-        if echo "$RENDERED" | jq -e "$JP.security_opt | any(. == \"seccomp:unconfined\" or . == \"apparmor:unconfined\")" >/dev/null; then
-            echo "ERROR: $SVC: tiene 'security_opt' con unconfined" >&2
-            exit 1
-        fi
+    # security_opt: si contiene 'unconfined' en cualquier forma
+    # (seccomp:unconfined, seccomp=unconfined, apparmor:unconfined,
+    # systempaths=unconfined, etc.) falla. Regex case-insensitive.
+    if echo "$RENDERED" | jq -e "$JP.security_opt // [] | any(test(\"(?i)unconfined\"))" >/dev/null; then
+        echo "ERROR: $SVC: tiene 'security_opt' con unconfined" >&2
+        exit 1
     fi
 
     # binds en este servicio.
@@ -164,13 +165,15 @@ for SVC in $SERVICES_NO_PROFILES; do
     done < <(echo "$RENDERED" | jq -r "$JP.volumes // [] | map(select(.type == \"bind\")) | .[].source // \"\"")
 done
 
-# 3c. Binds declarados en el bloque raíz 'volumes:' (pueden usarse desde
-#     varios servicios con la forma 'source: target'). El tipo aquí lo decide
-#     docker compose: si el source es ruta de host, lo marca type=bind.
+# 3c. Binds declarados en el bloque raíz 'volumes:'. Un volumen con nombre
+#     puede montar una carpeta del host vía driver_opts ({type: none, o: bind,
+#     device: <ruta>}), así que se recorre device en lugar de source/type.
 while IFS= read -r B; do
     [ -z "$B" ] && continue
     check_bind "volumes:" "$B" || exit 1
-done < <(echo "$RENDERED" | jq -r '.volumes // {} | to_entries[] | select(.value.type == "bind") | .value.source // ""')
+done < <(echo "$RENDERED" | jq -r '.volumes // {} | to_entries[]
+        | select((.value.driver_opts.o // "") | split(",") | any(. == "bind"))
+        | .value.driver_opts.device // ""')
 
 # 3d. Sin redes con name fijo. Cada red usada debe tener 'name' igual a
 #     '<project>_<key>' (auto-derivación por defecto de docker compose).
@@ -182,6 +185,36 @@ BAD_NET="$(echo "$RENDERED" | jq -r --arg p "$EXPECTED_PROJECT" \
         | .key')"
 if [ -n "$BAD_NET" ]; then
     echo "ERROR: redes con 'name' fijo (no respeta el nombre de Coolify): $BAD_NET" >&2
+    exit 1
+fi
+
+# 3e. Volúmenes sin 'name' fijo (o con name parametrizado). Coolify pone el
+#     nombre del proyecto; cualquier 'name' declarado en el compose deja de
+#     ser sobreescribible. Se acepta la forma '<project>_<key>' (auto-derivada)
+#     y los nombres del source que contienen '${...}' (parametrizados).
+#     Se detecta parametrización directamente en el archivo (no en el render)
+#     para no caer en el tramp de substring del valor ficticio.
+VOL_NAMES_PARAM="$(python3 -c '
+import yaml, json
+with open("'"$COMPOSE_FILE"'") as f:
+    data = yaml.safe_load(f)
+out = {}
+for k, v in (data.get("volumes") or {}).items():
+    if v and isinstance(v, dict) and "name" in v and v["name"] is not None:
+        out[k] = "${" in str(v["name"])
+print(json.dumps(out))
+' 2>/dev/null || echo "{}")"
+BAD_VOL="$(echo "$RENDERED" | jq -r --arg p "$EXPECTED_PROJECT" --argjson params "$VOL_NAMES_PARAM" \
+    '.volumes // {} | to_entries[]
+        | . as $v
+        | select(.value.name != null)
+        | select(
+            (.value.name != ($p + "_" + $v.key))
+            and (($params[$v.key] // false) | not)
+        )
+        | "\($v.key): \(.value.name)"')"
+if [ -n "$BAD_VOL" ]; then
+    echo "ERROR: volumes con 'name' fijo (no respeta el nombre de Coolify): $BAD_VOL" >&2
     exit 1
 fi
 
