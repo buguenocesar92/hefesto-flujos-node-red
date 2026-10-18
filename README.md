@@ -28,6 +28,14 @@ Requisitos: Docker + Compose v2 y Python3.11+; comenzar con 1CPU/1GB y dimension
 5. Coolify: importar compose.yaml con ops y examples; variables .env; dominio HTTPS al servicio app1880. No publicar override bootstrap. Editor en /editor/, endpoints en /api/. Proxy con WebSocket y límites de cuerpo/tiempo acordes al flujo.
 6. Restringir /editor por VPN/IP en proxy si los clientes solo consumen /api. Mantener autenticación de Node-RED. No exponer1880 directamente. Probar rechazo a /editor/flows sin token y a endpoint HTTP sin credenciales.
 
+## Despliegue en Coolify (MVP Hefesto)
+
+- Build pack Docker Compose, archivo `compose.yaml`, base_dir `/`. Coolify enruta el dominio al servicio `app` por `expose: ["1880"]` (no `ports:`); editor en `/editor/` y endpoints HTTP en `/api/`.
+- Variables obligatorias: `NR_CREDENTIAL_SECRET`, `NR_ADMIN_HASH` y `NR_HTTP_HASH`. Opcionales con valor por defecto: `NR_ADMIN_USER`, `NR_HTTP_USER` y `VOLUME_PREFIX`.
+- Los hashes bcrypt (`$2b$08$...`) llevan `$` literales. En la interfaz de Coolify se introducen como literales o escapando cada `$` como `$$` (por ejemplo `$2b$08$...` → `$$2b$$08$$...`) para que Compose no los interprete como variables. Verificar tras arrancar que la app acepta el hash.
+- `VOLUME_PREFIX` debe ser único por instancia o cliente. El volumen de datos queda con nombre `${VOLUME_PREFIX}-data`; si dos despliegues comparten prefijo, comparten el mismo volumen y se pisan flujos y credenciales.
+- El servicio `initialize` es one-shot y solo copia `examples/flows.json` si el volumen está vacío; no pisa flujos existentes. Los servicios con `profiles: [tools]` (`filetools`, `permissions`) no se levantan en Coolify.
+
 No hay instalación de paquetes desde paleta ni módulos externos en Function habilitada. Para agregar nodos revisar licencia/seguridad y construir imagen propia con versiones bloqueadas; no activar instalación arbitraria en producción. Proyectos Git deshabilitados inicialmente.
 
 ## Contexto, operación y respaldo
